@@ -59,7 +59,82 @@ def predict_with_probability(model, features, positive_class=1):
     return predictions, probabilities[:, positive_index]
 
 
+
 # load file
+
+def validate_lab_data(data, radiomics_data=None, median_data=None):
+    """Validate patient-level clinical/laboratory data before imputation."""
+    if data is None or data.empty:
+        raise ValueError("Clinical/lab input CSV is empty.")
+
+    if "patient_id" not in data.columns:
+        raise ValueError("Clinical/lab input must contain a 'patient_id' column.")
+
+    patient_ids = data["patient_id"]
+    if patient_ids.isnull().any() or patient_ids.astype(str).str.strip().eq("").any():
+        raise ValueError("Clinical/lab input contains missing patient_id values.")
+
+    if data["patient_id"].duplicated().any():
+        duplicates = data.loc[data["patient_id"].duplicated(), "patient_id"].tolist()
+        raise ValueError("Clinical/lab input contains duplicate patient_id values: {}".format(duplicates))
+
+    if radiomics_data is not None:
+        if "patient_id" not in radiomics_data.columns:
+            raise ValueError("Radiomics input must contain a 'patient_id' column.")
+        radiomics_ids = set(radiomics_data["patient_id"].dropna().astype(str).str.strip())
+        lab_ids = set(patient_ids.astype(str).str.strip())
+        missing_lab = sorted(radiomics_ids - lab_ids)
+        extra_lab = sorted(lab_ids - radiomics_ids)
+        if missing_lab or extra_lab:
+            raise ValueError(
+                "Patient ID mismatch between radiomics and clinical/lab data. "
+                "Missing lab IDs: {}; extra lab IDs: {}.".format(missing_lab, extra_lab)
+            )
+
+    if median_data is not None:
+        if median_data.empty:
+            raise ValueError("Median/imputation input is empty.")
+        if "patient_id" not in median_data.columns:
+            raise ValueError("Median/imputation input must contain a 'patient_id' column.")
+        if len(median_data) != 1:
+            raise ValueError("Median/imputation input must contain exactly one reference row.")
+        missing_medians = sorted(set(data.columns) - set(median_data.columns) - {"patient_id"})
+        if missing_medians:
+            raise ValueError(
+                "Median/imputation input is missing columns: {}.".format(missing_medians)
+            )
+
+
+def impute_lab_data(lab_data, lab_median):
+    """Return a copy of lab data with missing feature values filled from median row."""
+    if lab_data is None or lab_data.empty:
+        raise ValueError("Clinical/lab input CSV is empty.")
+    if lab_median is None or lab_median.empty:
+        raise ValueError("Median/imputation input is empty.")
+    if "patient_id" not in lab_data.columns or "patient_id" not in lab_median.columns:
+        raise ValueError("Both clinical/lab and median data must contain 'patient_id'.")
+
+    result = lab_data.copy()
+    median_row = lab_median.iloc[0]
+    feature_columns = [col for col in result.columns if col != "patient_id"]
+
+    missing_medians = [col for col in feature_columns if col not in lab_median.columns]
+    if missing_medians:
+        raise ValueError("Median/imputation input is missing columns: {}.".format(missing_medians))
+
+    for col in feature_columns:
+        # Convert invalid numeric strings to NaN so they are handled consistently.
+        result[col] = pd.to_numeric(result[col], errors="coerce")
+        median_value = pd.to_numeric(pd.Series([median_row[col]]), errors="coerce").iloc[0]
+        if result[col].isnull().any():
+            if pd.isnull(median_value):
+                raise ValueError(
+                    "Cannot impute '{}' because its reference median is missing or nonnumeric.".format(col)
+                )
+            result[col] = result[col].fillna(median_value)
+    return result
+
+
 # YOU MAY CHANGE THIS LINE
 radiomics_data = pd.read_csv("example_MLinput.csv")
 # YOU MAY CHANGE THIS LINE
@@ -77,27 +152,52 @@ del_col_name = ['ct_path','study_id','series_id','diagnostics_Versions_PyRadiomi
                 'diagnostics_Mask-original_CenterOfMass']
 # All the numeric columns convert to numeric
 def lesion_to_patient(data):
-    del_col_name.append("patient_id")
-    Xcols = list(set(data.columns) - set(del_col_name))
-    data[Xcols] = data[Xcols].apply(pd.to_numeric)
-    feature_name_list = ['mean', 'std', 'medium', 'skew', '75', '25']
-    X_mean = data.groupby('patient_id')[Xcols].mean()
-    X_std = data.groupby('patient_id')[Xcols].std()[Xcols]
-    X_medium = data.groupby('patient_id')[Xcols].median()[Xcols]
-    X_skew = data.groupby('patient_id')[Xcols].skew()[Xcols]
-    X_75 = data.groupby('patient_id')[Xcols].quantile(q=0.75)[Xcols]
-    X_25 = data.groupby('patient_id')[Xcols].quantile(q=0.25)[Xcols]
-    feature_list = [X_mean, X_std, X_medium, X_skew, X_75, X_25]
-    for i in range(len(feature_name_list)):
-        name_dict = {}
-        for name in Xcols:
-            name_dict[name] = name + '_' + feature_name_list[i]
-        feature_list[i] = feature_list[i].rename(columns=name_dict)
-    X_final_no_count = pd.concat(feature_list, axis=1)
-    lesion_count = data.groupby('patient_id')['log-sigma-2-0-mm-3D_firstorder_Skewness'].count()
-    lesion_count.name = 'lesion count'
-    X_final = X_final_no_count.merge(lesion_count, on='patient_id')
-    return X_final.fillna(0)
+    """Aggregate lesion-level radiomics rows into one record per patient."""
+    if data is None or data.empty:
+        raise ValueError("Radiomics input is empty; cannot aggregate lesions.")
+    if "patient_id" not in data.columns:
+        raise ValueError("Radiomics input must contain a 'patient_id' column.")
+    if data["patient_id"].isnull().any() or data["patient_id"].astype(str).str.strip().eq("").any():
+        raise ValueError("Radiomics input contains missing patient_id values.")
+
+    # Work on a copy and preserve feature order; do not mutate global column lists.
+    data = data.copy()
+    excluded = set(del_col_name + ["patient_id"])
+    xcols = [col for col in data.columns if col not in excluded]
+    if not xcols:
+        raise ValueError("Radiomics input contains no usable feature columns.")
+
+    for col in xcols:
+        data[col] = pd.to_numeric(data[col], errors="coerce")
+
+    grouped = data.groupby("patient_id", sort=True)[xcols]
+    feature_name_list = ["mean", "std", "medium", "skew", "75", "25"]
+    feature_list = [
+        grouped.mean(),
+        grouped.std(),
+        grouped.median(),
+        grouped.skew(),
+        grouped.quantile(q=0.75),
+        grouped.quantile(q=0.25)
+    ]
+
+    renamed_features = []
+    for frame, statistic in zip(feature_list, feature_name_list):
+        renamed_features.append(frame.rename(
+            columns={name: name + "_" + statistic for name in xcols}
+        ))
+
+    result = pd.concat(renamed_features, axis=1)
+    if "log-sigma-2-0-mm-3D_firstorder_Skewness" in data.columns:
+        counts = data.groupby("patient_id")[
+            "log-sigma-2-0-mm-3D_firstorder_Skewness"
+        ].count()
+    else:
+        # Fall back to number of lesion rows if the legacy count feature is absent.
+        counts = data.groupby("patient_id").size()
+    counts.name = "lesion count"
+    result = result.join(counts)
+    return result.replace([np.inf, -np.inf], np.nan).fillna(0)
 
 def radiomicsModel(radiomics_data):
     radiomics_data = pd.read_csv(radiomics_data)
@@ -155,7 +255,6 @@ def radiomicsClinLab(radiomics_data, lab_data):
     for item in columns:
         if np.isnan(lab_data[item].values[0]):
             lab_data[item].values[0] = lab_median[item].values[0]
-            print('Impute: ', item)
 
     reordered = patient_input[feature_name]
     patient_input_radioclinlab = pd.concat([reordered, lab_data], axis=1, ignore_index=True)
