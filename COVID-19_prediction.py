@@ -6,6 +6,25 @@ import argparse
 import joblib
 warnings.simplefilter('ignore', UserWarning)
 
+
+def validate_radiomics_data(data):
+    """Validate radiomics input before patient-level aggregation."""
+    if data.empty:
+        raise ValueError("Radiomics input CSV is empty.")
+
+    if "patient_id" not in data.columns:
+        raise ValueError(
+            "Radiomics input must contain a 'patient_id' column."
+        )
+
+    # Reject missing, empty, or whitespace-only patient IDs.
+    patient_ids = data["patient_id"]
+
+    if patient_ids.isnull().any() or patient_ids.astype(str).str.strip().eq("").any():
+        raise ValueError(
+            "Radiomics input contains missing patient_id values."
+        )
+
 # load file
 # YOU MAY CHANGE THIS LINE
 radiomics_data = pd.read_csv("example_MLinput.csv")
@@ -48,6 +67,7 @@ def lesion_to_patient(data):
 
 def radiomicsModel(radiomics_data):
     radiomics_data = pd.read_csv(radiomics_data)
+    validate_radiomics_data(radiomics_data)
     patient_input = lesion_to_patient(radiomics_data)
     ##Radiomics Model
     mean_std = np.load("models/radiomics_ss.npy")
@@ -73,6 +93,7 @@ def radiomicsModel(radiomics_data):
 
 def radiomicsClinLab(radiomics_data, lab_data):
     radiomics_data = pd.read_csv(radiomics_data)
+    validate_radiomics_data(radiomics_data)
     lab_data = pd.read_csv(lab_data)
     patient_input = lesion_to_patient(radiomics_data)
     ##RadioClinLab Model
