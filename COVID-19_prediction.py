@@ -24,6 +24,40 @@ def validate_radiomics_data(data):
         raise ValueError(
             "Radiomics input contains missing patient_id values."
         )
+def predict_with_probability(model, features, positive_class=1):
+    """Return predicted classes and probabilities for a chosen class."""
+    if not hasattr(model, "predict_proba"):
+        raise ValueError(
+            "The model does not support probability predictions."
+        )
+
+    if not hasattr(model, "classes_"):
+        raise ValueError("The model does not expose its class labels.")
+
+    classes = list(model.classes_)
+
+    if positive_class not in classes:
+        raise ValueError(
+            "Requested class {} is not available in the model.".format(
+                positive_class
+            )
+        )
+
+    predictions = model.predict(features)
+    probabilities = model.predict_proba(features)
+
+    if probabilities.ndim != 2:
+        raise ValueError("Model probabilities must be a 2D array.")
+
+    if probabilities.shape[1] != len(classes):
+        raise ValueError(
+            "Probability columns do not match the model's classes."
+        )
+
+    positive_index = classes.index(positive_class)
+
+    return predictions, probabilities[:, positive_index]
+
 
 # load file
 # YOU MAY CHANGE THIS LINE
@@ -78,18 +112,32 @@ def radiomicsModel(radiomics_data):
     ICU_clfmodel = joblib.load("models/radiomics_models_ICU_clfmodel.joblib")
     ICU_fsmodel = joblib.load("models/radiomics_models_ICU_fsmodel.joblib")
     ICU_x = ICU_fsmodel.transform(test_X_std)
-    ICU = ICU_clfmodel.predict(ICU_x)
+    ICU, ICU_prob = predict_with_probability(
+    ICU_clfmodel, ICU_x)
 
     MV_clfmodel = joblib.load("models/radiomics_models_MV_clfmodel.joblib")
     MV_x = test_X_std
-    MV = MV_clfmodel.predict(MV_x)
+    MV , MV_prob = predict_with_probability(
+    MV_clfmodel, MV_x
+)
 
     death_clfmodel = joblib.load("models/radiomics_models_death_clfmodel.joblib")
     death_fsmodel = joblib.load("models/radiomics_models_death_fsmodel.joblib")
     death_x = death_fsmodel.transform(test_X_std)
-    death = death_clfmodel.predict(death_x)
+    death, death_prob = predict_with_probability(
+    death_clfmodel, death_x
+)
 
-    print('Radiomics Model: \nICU: {}\nMV: {} \ndeath: {}'.format(ICU[0],MV[0],death[0]))
+    print(
+    'Radiomics Model:'
+    '\nICU: {} (class 1 probability: {:.4f}%)'
+    '\nMV: {} (class 1 probability: {:.6f}%)'
+    '\nDeath: {} (class 1 probability: {:.4f}%)'.format(
+        ICU[0], ICU_prob[0]*100,
+        MV[0], MV_prob[0]*100,
+        death[0], death_prob[0]*100
+    )
+)
 
 def radiomicsClinLab(radiomics_data, lab_data):
     radiomics_data = pd.read_csv(radiomics_data)
@@ -116,19 +164,36 @@ def radiomicsClinLab(radiomics_data, lab_data):
     ICU_clfmodel = joblib.load("models/radioclinlab_models_ICU_clfmodel.joblib")
     ICU_fsmodel = joblib.load("models/radioclinlab_models_ICU_fsmodel.joblib")
     ICU_x = ICU_fsmodel.transform(test_X_std)
-    ICU = ICU_clfmodel.predict(ICU_x)
+    ICU , ICU_prob = predict_with_probability(
+    ICU_clfmodel, ICU_x
+)
+        
 
     MV_clfmodel = joblib.load("models/radioclinlab_models_MV_clfmodel.joblib")
     MV_fsmodel = joblib.load("models/radioclinlab_models_MV_fsmodel.joblib")
     MV_x = MV_fsmodel.transform(test_X_std)
-    MV = MV_clfmodel.predict(MV_x)
+    MV , MV_prob = predict_with_probability(
+    MV_clfmodel, MV_x
+)
 
     death_clfmodel = joblib.load("models/radioclinlab_models_death_clfmodel.joblib")
     death_fsmodel = joblib.load("models/radioclinlab_models_death_fsmodel.joblib")
     death_x = death_fsmodel.transform(test_X_std)
-    death = death_clfmodel.predict(death_x)
+    death, death_prob = predict_with_probability(
+    death_clfmodel, death_x
+)
 
-    print('RadioClinLab Model: \nICU: {}\nMV: {} \ndeath: {}'.format(ICU[0], MV[0], death[0]))
+    print(
+        'RadioClinLab Model:'
+        '\nICU: {} (class 1 probability: {:.4f}%)'
+        '\nMV: {} (class 1 probability: {:.6f}%)'
+        '\nDeath: {} (class 1 probability: {:.4f}%)'.format(
+            ICU[0], ICU_prob[0] * 100,
+            MV[0], MV_prob[0] * 100,
+            death[0], death_prob[0] * 100
+        )
+    )
+
 
 def parse_opts():
     '''
