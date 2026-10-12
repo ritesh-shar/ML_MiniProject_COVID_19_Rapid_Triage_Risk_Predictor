@@ -2,6 +2,13 @@
 
 A machine learning mini-project based on the research work *CT-based Patient Triage of COVID-19: Radiomics Prediction of ICU Admission, Mechanical Ventilation, and Death of Patients* by Xianghao Zhan and Yiheng Li.
 
+By : 
+
+Prathik M Nmabiar (PES2UG24CS371)
+
+Ritesh Kumar Sharma (PES2UG24CS404)
+
+
 ## 1. Problem Statement
 
 COVID-19 patients can experience different clinical outcomes, including admission to an intensive care unit (ICU), requiring mechanical ventilation (MV), or in-hospital death. Identifying patients at higher risk of these outcomes may help clinicians prioritize care and allocate medical resources.
